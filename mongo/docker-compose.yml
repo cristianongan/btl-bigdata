@@ -1,0 +1,70 @@
+version: "3.9"
+
+services:
+  # ---------- Config Server ----------
+  cfg1:
+    image: mongo:7
+    command: ["--configsvr", "--replSet", "cfgReplSet", "--port", "27017"]
+    ports: ["27019:27017"] 
+    volumes: ["cfg1:/data/db"]
+    networks: ["mongo-net"]
+  cfg2:
+    image: mongo:7
+    command: ["--configsvr", "--replSet", "cfgReplSet", "--port", "27017"]
+    volumes: ["cfg2:/data/db"]
+    networks: ["mongo-net"]
+  cfg3:
+    image: mongo:7
+    command: ["--configsvr", "--replSet", "cfgReplSet", "--port", "27017"]
+    volumes: ["cfg3:/data/db"]
+    networks: ["mongo-net"]
+
+  # ---------- Shard 1 (replica set) ----------
+  shard1a:
+    image: mongo:7
+    command: ["--shardsvr", "--replSet", "shard1rs", "--port", "27017"]
+    volumes: ["shard1a:/data/db"]
+    networks: ["mongo-net"]
+  shard1b:
+    image: mongo:7
+    command: ["--shardsvr", "--replSet", "shard1rs", "--port", "27017"]
+    volumes: ["shard1b:/data/db"]
+    networks: ["mongo-net"]
+  shard1c:
+    image: mongo:7
+    command: ["--shardsvr", "--replSet", "shard1rs", "--port", "27017"]
+    volumes: ["shard1c:/data/db"]
+    networks: ["mongo-net"]
+
+  # ---------- Mongos (router) ----------
+  mongos:
+    image: mongo:7
+    depends_on: [cfg1, cfg2, cfg3, shard1a, shard1b, shard1c]
+    command: >
+      bash -lc "
+      mongos --configdb cfgReplSet/cfg1:27017,cfg2:27017,cfg3:27017 --port 27017 --bind_ip_all
+      "
+    ports: ["27017:27017"]
+    networks: ["mongo-net"]
+    volumes:
+      - ./opt:/data
+
+  init-sharding:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on: [mongos]
+    networks: [mongo-net]
+    restart: "no"   # chạy 1 lần
+
+volumes:
+  cfg1: {}
+  cfg2: {}
+  cfg3: {}
+  shard1a: {}
+  shard1b: {}
+  shard1c: {}
+
+networks:
+  mongo-net:
+    driver: bridge
