@@ -1,0 +1,154 @@
+version: "3.9"
+
+services:
+  # ---------- Config Server ----------
+  cfg1:
+    image: mongo:7
+    command: ["--configsvr", "--replSet", "cfgReplSet", "--port", "27017"]
+    ports: ["27019:27017"] 
+    volumes: ["cfg1:/data/db"]
+    networks: ["mongo-net"]
+  cfg2:
+    image: mongo:7
+    command: ["--configsvr", "--replSet", "cfgReplSet", "--port", "27017"]
+    volumes: ["cfg2:/data/db"]
+    networks: ["mongo-net"]
+  cfg3:
+    image: mongo:7
+    command: ["--configsvr", "--replSet", "cfgReplSet", "--port", "27017"]
+    volumes: ["cfg3:/data/db"]
+    networks: ["mongo-net"]
+
+  # ---------- Shard 1 (replica set) ----------
+  shard1a:
+    image: mongo:7
+    command: ["--shardsvr", "--replSet", "shard1rs", "--port", "27017"]
+    volumes: ["shard1a:/data/db"]
+    networks: ["mongo-net"]
+  shard1b:
+    image: mongo:7
+    command: ["--shardsvr", "--replSet", "shard1rs", "--port", "27017"]
+    volumes: ["shard1b:/data/db"]
+    networks: ["mongo-net"]
+  shard1c:
+    image: mongo:7
+    command: ["--shardsvr", "--replSet", "shard1rs", "--port", "27017"]
+    volumes: ["shard1c:/data/db"]
+    networks: ["mongo-net"]
+
+  # ---------- Mongos (router) ----------
+  mongos:
+    image: mongo:7
+    depends_on: [cfg1, cfg2, cfg3, shard1a, shard1b, shard1c]
+    command: >
+      bash -lc "
+      mongos --configdb cfgReplSet/cfg1:27017,cfg2:27017,cfg3:27017 --port 27017 --bind_ip_all
+      "
+    ports: ["27017:27017"]
+    networks: ["mongo-net"]
+    volumes:
+      - ./opt:/data
+
+  init-sharding:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on: [mongos]
+    networks: [mongo-net]
+    restart: "no"   # chạy 1 lần
+  # hadoop
+  # ---------- HDFS ----------
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    environment:
+      - CLUSTER_NAME=demo
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+    ports:
+      - "9870:9870"  # NN Web UI
+      - "8020:8020"  # IPC
+    volumes:
+      - nn-data:/hadoop/dfs/name
+      - ./data:/data
+    networks: [mongo-net]
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:9870 >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  datanode1:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode1
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - SERVICE_PRECONDITION=namenode:9870
+    volumes:
+      - dn1-data:/hadoop/dfs/data
+    ports:
+      - "9864:9864"  # DN Web UI
+    networks: [mongo-net]
+    depends_on: [namenode]
+
+  datanode2:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode2
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:8020
+      - SERVICE_PRECONDITION=namenode:9870
+    volumes:
+      - dn2-data:/hadoop/dfs/data
+    networks: [mongo-net]
+    depends_on: [namenode]
+
+  # ---------- Spark ----------
+  spark-master:
+    image: apache/spark:3.5.1
+    container_name: spark-master
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    command: >
+      bash -lc "/opt/spark/sbin/start-master.sh &&
+                tail -f /opt/spark/logs/*"
+    ports:
+      - "7077:7077"   # RPC
+      - "8080:8080"   # Master UI
+    volumes:
+      - ./spark-run/target:/opt/spark-apps
+    networks: [mongo-net]
+
+  spark-worker-1:
+    image: apache/spark:3.5.1
+    container_name: spark-worker-1
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    depends_on: [spark-master]
+    command: >
+      bash -lc "/opt/spark/sbin/start-worker.sh spark://spark-master:7077 &&
+                tail -f /opt/spark/logs/*"
+    networks: [mongo-net]
+
+  metabase:
+    image: metabase/metabase
+    container_name: metabase
+    ports:
+      - "3000:3000"
+    volumes:
+       - ./metabase-data:/metabase-data
+    networks: [mongo-net]
+
+volumes:
+  cfg1: {}
+  cfg2: {}
+  cfg3: {}
+  shard1a: {}
+  shard1b: {}
+  shard1c: {}
+  nn-data: {}
+  dn1-data: {}
+  dn2-data: {}
+
+
+networks:
+  mongo-net:
+    driver: bridge
